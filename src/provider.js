@@ -2,6 +2,7 @@ export class OpenAICompatibleProvider {
   #baseUrl;
   #apiKey;
   #model;
+  #lastResponseModel;
 
   constructor({ baseUrl, apiKey, model } = {}) {
     this.#apiKey = apiKey ?? process.env.AI_API_KEY ?? 'local-eval-key';
@@ -41,15 +42,15 @@ export class OpenAICompatibleProvider {
     });
     const call = message.tool_calls?.find(candidate => candidate.function?.name === 'probe_echo');
     if (!call) {
-      return { ok: false, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), reason: 'No probe_echo tool call returned.' };
+      return { ok: false, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), routed_model: this.#lastResponseModel, reason: 'No probe_echo tool call returned.' };
     }
     try {
       const args = JSON.parse(call.function.arguments);
       return args.value === 'ready'
-        ? { ok: true, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), tool: 'probe_echo' }
-        : { ok: false, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), reason: 'Probe returned malformed arguments.' };
+        ? { ok: true, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), tool: 'probe_echo', routed_model: this.#lastResponseModel }
+        : { ok: false, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), routed_model: this.#lastResponseModel, reason: 'Probe returned malformed arguments.' };
     } catch {
-      return { ok: false, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), reason: 'Probe returned non-JSON tool arguments.' };
+      return { ok: false, model: this.#model, endpoint: endpointUrl(this.#baseUrl, 'chat/completions').toString(), routed_model: this.#lastResponseModel, reason: 'Probe returned non-JSON tool arguments.' };
     }
   }
 
@@ -62,6 +63,7 @@ export class OpenAICompatibleProvider {
     });
     if (!response.ok) throw new Error(`Model request failed: ${response.status} ${await response.text()}`);
     const body = await response.json();
+    this.#lastResponseModel = body.model || null;
     const message = body.choices?.[0]?.message;
     if (!message) throw new Error('Model response did not include a message.');
     return message;
