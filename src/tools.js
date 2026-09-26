@@ -141,13 +141,21 @@ export class WorkspaceTools {
   }
 
   async #verify({ level = 'quick' } = {}) {
-    const diffResult = await this.#shell({ command: 'git diff --stat' });
-    const diffOutput = diffResult.stdout?.trim() || 'No git diff detected.';
-    
-    if (level === 'quick') {
-      return { ok: true, level, diff_status: diffOutput, test_status: 'Skipped in quick level' };
+    // A green result means the workspace is a git repo, its diff is well formed,
+    // and its declared tests passed. A fast check may be requested explicitly,
+    // but it must never be reported as verification.
+    const rootCheck = await this.#shell({ command: 'git rev-parse --is-inside-work-tree' });
+    if (!rootCheck.ok || rootCheck.stdout.trim() !== 'true') {
+      return { ok: false, level, error: 'Not a git worktree; verification unavailable.', detail: rootCheck.stderr };
     }
-
+    const diff = await this.#shell({ command: 'git diff --check && git diff --cached --check' });
+    if (!diff.ok) return { ok: false, level, error: 'Git diff check failed.', detail: diff.stderr || diff.stdout };
+    const status = await this.#shell({ command: 'git status --short' });
+    if (!status.ok) return { ok: false, level, error: 'Git status failed.', detail: status.stderr };
+    if (level === 'quick') {
+      return { ok: false, level, diff_status: status.stdout.trim(), test_status: 'Tests not run; request standard verification.' };
+    }
+    if (level !== 'standard') return { ok: false, level, error: 'Unknown verification level.' };
     let testCmd = null;
     try {
       const entries = await fs.readdir(this.#workspace);
@@ -160,24 +168,13 @@ export class WorkspaceTools {
       if (!testCmd && names.has('pyproject.toml')) testCmd = 'python -m pytest';
       if (!testCmd && names.has('Cargo.toml')) testCmd = 'cargo test';
       if (!testCmd && names.has('go.mod')) testCmd = 'go test ./...';
-    } catch {
-      // Ignore detection error
+    } catch (error) {
+      return { ok: false, level, error: `Test discovery failed: ${error.message}` };
     }
-
-    if (!testCmd) {
-      return { ok: true, level, diff_status: diffOutput, test_status: 'No standard test suite detected' };
-    }
-
+    if (!testCmd) return { ok: false, level, error: 'No declared test command detected.' };
     const testResult = await this.#shell({ command: testCmd });
-    return {
-      ok: testResult.ok,
-      level,
-      diff_status: diffOutput,
-      test_command: testCmd,
-      passed: testResult.ok,
-      stdout: testResult.stdout,
-      stderr: testResult.stderr,
-    };
+    return { ok: testResult.ok, level, diff_status: status.stdout.trim(),
+      test_command: testCmd, passed: testResult.ok, stdout: testResult.stdout, stderr: testResult.stderr };
   }
 
   async #fetch({ url }) {
