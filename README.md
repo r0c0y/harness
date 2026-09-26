@@ -53,3 +53,8 @@ The default provider is OpenAI-compatible chat completions. This is intentional:
 ## Deliberate first-slice limits
 
 The initial runtime is a focused, inspect-edit-verify harness. It does not enable browser automation, remote MCP servers, cloud sandboxes, autonomous git push, or auxiliary models by default. Those capabilities require their own policies and tests before activation.
+
+
+## Local-only safety warning
+
+Run `make serve` only on a trusted local machine, not on a public interface. The HTTP API currently lacks authentication, allows cross-origin requests, accepts a workspace override and a provider URL, and its probe accepts an API key through a GET query. The shell tool runs `/bin/sh` behind a limited command blocklist, not a container or OS sandbox; workspace file checks are lexical and may follow symlinks outside the root. Do not point it at untrusted repositories or expose it to other users until these are hardened. `project_verify` with `standard` runs the declared tests; a quick check and an untested edit are never a verified fix.
