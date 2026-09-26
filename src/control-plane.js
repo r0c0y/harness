@@ -47,6 +47,8 @@ export class ControlPlane {
 
     await this.#emit('task_started', { task });
     let toolCalls = 0;
+    let changed = false;
+    let verified = false;
 
     for (let turn = 1; turn <= MAX_MODEL_TURNS; turn += 1) {
       await this.#emit('model_turn_started', { turn, tool_calls: toolCalls });
@@ -58,6 +60,12 @@ export class ControlPlane {
       const calls = message.tool_calls ?? [];
       if (calls.length === 0) {
         const answer = message.content ?? '';
+        if (changed && !verified) {
+          const warning = 'Stopped without a passing standard verification after the last edit. Do not treat the patch as verified.';
+          await this.#emit('task_stopped', { reason: 'unverified_edit', warning });
+          await this.#saveSummary(task, warning, 'unverified', turn, toolCalls);
+          return { answer: warning, turns: turn, toolCalls, verified: false };
+        }
         await this.#emit('task_finished', { turn, answer });
         await this.#saveSummary(task, answer, 'finished', turn, toolCalls);
         return { answer, turns: turn, toolCalls };
@@ -76,6 +84,13 @@ export class ControlPlane {
         const result = decision.allowed
           ? await this.#execute(call.function.name, args, turn)
           : { ok: false, error: decision.message, policy_reason: decision.reason };
+        if (result.ok && ['file_write', 'file_replace'].includes(call.function.name)) {
+          changed = true;
+          verified = false;
+        }
+        if (call.function.name === 'project_verify' && result.ok && result.level === 'standard' && result.passed) verified = true;
+        // Shell commands may edit code. A prior verification cannot cover them.
+        if (call.function.name === 'shell_exec' && result.ok) { changed = true; verified = false; }
         messages.push(toolResultMessage(call.id, call.function.name, result));
       }
     }
@@ -171,7 +186,7 @@ function systemPrompt() {
 # Mission and Core Directives
 Your goal is to autonomously solve complex engineering tasks by planning, exploring, and modifying code safely. 
 - You MUST rely entirely on the provided tools to interact with the workspace.
-- The environment has zero external dependencies; respect this constraint by using native Node.js (v22+) ESM for all solutions unless explicitly told otherwise.
+- Respect the target repository's language, framework and existing dependencies. This harness runtime is Node.js, but the target project may be Python, Go, Rust or another stack.
 - Deletion over addition. Boring over clever. Make the smallest change that satisfies the task. 
 
 # Execution Workflow
