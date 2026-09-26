@@ -29,3 +29,8 @@ There is also an older preview server running from `harnessresources/deepseek-ha
 4. Re-run `make setup`, `node --test`, and the preview smoke check before calling the handoff complete.
 
 The local `.ai-harness/` run ledger is intentionally excluded from Git because it can contain prompts, paths, and execution evidence.
+
+
+## Safety for teammates
+
+Keep `make serve` local only. There is no HTTP authentication and CORS is permissive; API requests can override workspace and provider URL. The shell tool's regex blocklist and lexical file-path checks are not sandbox isolation; symlinks can escape the workspace. Do not run untrusted projects until these are fixed. Treat `project_verify quick` as diagnostic only and require a passing standard test run after the last edit.
