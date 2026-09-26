@@ -68,6 +68,8 @@ test('executes file_replace tool call successfully', async () => {
   assert.equal(result.toolCalls, 1);
   const updated = await fs.readFile(path.join(workspace, 'config.js'), 'utf8');
   assert.equal(updated, 'const port = 8080;\n');
+  assert.equal(result.verified, false);
+  assert.match(result.answer, /without a passing standard verification/);
 });
 
 test('executes project_verify quick check', async () => {
@@ -102,3 +104,18 @@ class ScriptedProvider {
     return response;
   }
 }
+
+
+test('standard verification is required after an edit', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'harness-gate-'));
+  await fs.writeFile(path.join(workspace, 'config.js'), 'const ready = false;\n');
+  const provider = new ScriptedProvider([
+    { role: 'assistant', tool_calls: [{ id: 'edit', function: { name: 'file_replace', arguments: JSON.stringify({ path: 'config.js', old_text: 'false', new_text: 'true' }) } }] },
+    { role: 'assistant', tool_calls: [{ id: 'quick', function: { name: 'project_verify', arguments: JSON.stringify({ level: 'quick' }) } }] },
+    { role: 'assistant', content: 'Solved.' },
+  ]);
+  const plane = new ControlPlane({ provider, tools: new WorkspaceTools({ workspace }), policy: new PolicyEngine({ workspace }), ledger: new EvidenceLedger({ workspace, runId: 'gate-run' }), workspace });
+  const result = await plane.run('Fix config');
+  assert.equal(result.verified, false);
+  assert.match(result.answer, /without a passing standard verification/);
+});
