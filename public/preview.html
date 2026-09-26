@@ -7,6 +7,13 @@
     <link rel="icon" type="image/svg+xml" href="./favicon-dark.svg" media="(prefers-color-scheme: dark)" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" media="(prefers-color-scheme: light)" />
     <title>Kuro AI Harness Local Build</title>
+    <script>
+      if (!location.search.includes('preview-fixture=')) {
+        const url = new URL(location.href);
+        url.searchParams.set('preview-fixture', 'vfs-example');
+        history.replaceState(null, '', url.href);
+      }
+    </script>
     <script type="module" crossorigin src="./preview/bootstrap-DlVeEFeU.js"></script><script type="module" crossorigin src="./assets/index-Q6zc2uHV.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/vendor-CCJJTK99.js">
     <link rel="stylesheet" crossorigin href="./assets/vendor-BNsW4eBh.css">
