@@ -1,19 +1,14 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="icon" type="image/svg+xml" href="./favicon-dark.svg" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" type="image/svg+xml" href="./favicon.svg" media="(prefers-color-scheme: light)" />
-    <title>Kuro AI Harness Local Build</title>
-    <script type="module" crossorigin src="./preview/bootstrap-DlVeEFeU.js"></script>
-    <script type="module" crossorigin src="./assets/index-Q6zc2uHV.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/vendor-CCJJTK99.js">
-    <link rel="stylesheet" crossorigin href="./assets/vendor-BNsW4eBh.css">
-    <link rel="stylesheet" crossorigin href="./assets/index-DUvMhLle.css">
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kuro | Harness Control Plane</title>
+<style>
+:root{color-scheme:dark;font:16px/1.5 system-ui,sans-serif;background:#0a101a;color:#e7edf5}*{box-sizing:border-box}body{margin:0}header,main{max-width:1140px;margin:auto;padding:26px}header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #28364b}h1{font-size:clamp(27px,4vw,43px);line-height:1.12;margin:0 0 10px}h2{font-size:18px;margin:0 0 14px}.eyebrow{color:#73d9b5;font:600 12px monospace;letter-spacing:.12em;text-transform:uppercase}p,small{color:#a5b3c5}.intro{max-width:750px;padding:38px 0 24px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#111e2c;border:1px solid #2d4257;border-radius:14px;padding:22px;margin-bottom:18px}label{display:block;margin:12px 0 7px;color:#a5b3c5;font-size:13px}textarea,input{display:block;width:100%;background:#0b1522;border:1px solid #35495e;border-radius:7px;color:#f4f8fa;padding:11px;font:inherit}textarea{height:110px;resize:vertical}button{border:0;border-radius:7px;padding:10px 16px;margin:14px 8px 0 0;cursor:pointer;background:#56dab4;color:#07151d;font-weight:700}button.secondary{background:#223447;color:#e7edf5}button:disabled{opacity:.45;cursor:not-allowed}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#091420;border:1px solid #28364b;border-radius:8px;padding:14px;max-height:390px;overflow:auto;font:12px/1.5 ui-monospace,monospace}.status{color:#74dcbc}.warn{color:#ffca8b}.error{color:#ff938d}a{color:#82dfbd}@media(max-width:760px){.grid{grid-template-columns:1fr}header,main{padding:18px}}
+</style></head><body><header><strong>Kuro / Team Instinct</strong><span class="eyebrow">Local control plane</span></header><main>
+<section class="intro"><div class="eyebrow">Text-only coding agent</div><h1>Inspect. Edit. Verify. Show the evidence.</h1><p>Dispatch a task against a local workspace. Watch tool decisions and results as they happen. The harness does not publish changes, and an edited task is not verified until standard tests pass.</p><small class="warn">Local use only. The development server has no authentication or OS sandbox. Use trusted repositories.</small></section>
+<div class="grid"><div><section class="card"><h2>Run a task</h2><label for="workspace">Workspace (server-side path)</label><input id="workspace" placeholder="Leave blank for the server's workspace"><label for="task">Engineering task</label><textarea id="task" placeholder="Describe the code change or question"></textarea><button id="run">Run task</button><span id="run-status" class="status" role="status"></span></section><section class="card"><h2>Execution timeline</h2><pre id="events" aria-live="polite">No task yet.</pre></section></div><div><section class="card"><h2>Workspace preflight</h2><button class="secondary" id="preflight">Inspect workspace</button><pre id="preflight-output">Not inspected yet.</pre></section><section class="card"><h2>Model compatibility</h2><p>Probe sends one harmless function-call request. It does not execute a workspace tool.</p><button class="secondary" id="probe">Probe configured model</button><pre id="probe-output">Not probed yet.</pre></section><section class="card"><h2>Run result</h2><pre id="result">Waiting for a task.</pre></section></div></div></main>
+<script>
+const $=id=>document.getElementById(id); const pretty=value=>JSON.stringify(value,null,2); const workspace=()=>$('workspace').value.trim();
+$('preflight').onclick=async()=>{try{const q=workspace()?`?workspace=${encodeURIComponent(workspace())}`:'';const r=await fetch('/api/preflight'+q);$('preflight-output').textContent=pretty(await r.json())}catch(e){$('preflight-output').textContent=String(e)}};
+$('probe').onclick=async()=>{try{$('probe-output').textContent='Probing...';const r=await fetch('/api/probe');$('probe-output').textContent=pretty(await r.json())}catch(e){$('probe-output').textContent=String(e)}};
+$('run').onclick=async()=>{const task=$('task').value.trim();if(!task){$('run-status').textContent='Enter a task first.';return} $('run').disabled=true;$('run-status').textContent='Running';$('events').textContent='';$('result').textContent='Waiting for result...';try{const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({task,...(workspace()?{workspace:workspace()}:{})})});if(!r.ok)throw new Error(`HTTP ${r.status}: ${await r.text()}`);const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let index;while((index=buffer.indexOf('\n\n'))>=0){const block=buffer.slice(0,index);buffer=buffer.slice(index+2);const type=block.match(/^event: (.*)$/m)?.[1]??'status';const line=block.match(/^data: (.*)$/m)?.[1];if(!line)continue;const data=JSON.parse(line);if(type==='agent_event'){$('events').textContent+=`${data.type} ${pretty(data.data)}\n`;$('events').scrollTop=$('events').scrollHeight}else if(type==='status'&&data.state==='finished'){$('result').textContent=pretty(data.result);$('run-status').textContent='Finished'}else if(type==='error')throw new Error(data.error)}}}if($('run-status').textContent==='Running')$('run-status').textContent='Stream ended';}catch(e){$('run-status').textContent='Failed';$('result').textContent=String(e)}finally{$('run').disabled=false}};
+</script></body></html>
