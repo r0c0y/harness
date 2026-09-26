@@ -17,7 +17,7 @@ test('server exposes preflight workspace API and Web UI', async () => {
     const htmlRes = await fetch(`http://localhost:${port}/`);
     assert.equal(htmlRes.status, 200);
     const html = await htmlRes.text();
-    assert.match(html, /Kuro/);
+    assert.match(html, /Kuro | Harness Control Plane/);
 
     const preflightRes = await fetch(`http://localhost:${port}/api/preflight`);
     assert.equal(preflightRes.status, 200);
