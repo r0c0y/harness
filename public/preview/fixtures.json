@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "defaultFixture": "vfs-example",
+  "fixtures": [
+    {
+      "id": "vfs-example",
+      "label": "Built-in showcase",
+      "description": "Sample workspace, tool cards, subagents, and paged history.",
+      "overlays": [
+        "fixtures/vfs-example.tar.gz"
+      ]
+    }
+  ]
+}
