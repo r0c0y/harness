@@ -6,6 +6,8 @@ import { createDecisionOracle } from './oracles.js';
 import { PolicyEngine } from './policy.js';
 import { OpenAICompatibleProvider } from './provider.js';
 import { WorkspaceTools } from './tools.js';
+import { CodebaseNavigator } from './navigation.js';
+import { SkillRegistry } from './skills.js';
 
 const workspace = process.env.HARNESS_WORKSPACE ?? process.cwd();
 const provider = new OpenAICompatibleProvider({
@@ -32,12 +34,17 @@ if (process.argv.includes('--probe')) {
 // control-plane slice intentionally uses deterministic policy for enforcement.
 createDecisionOracle(process.env);
 
+const navigator = new CodebaseNavigator({ workspace });
+const skillRegistry = new SkillRegistry({ workspace });
+await skillRegistry.loadSkills(); // Pre-load on startup
+
 const controlPlane = new ControlPlane({
   provider,
-  tools: new WorkspaceTools({ workspace }),
+  tools: new WorkspaceTools({ workspace, navigator, skillRegistry }),
   policy: new PolicyEngine({ workspace, networkEnabled: process.env.HARNESS_ENABLE_NETWORK === '1' }),
   ledger: new EvidenceLedger({ workspace, runId: createRunId() }),
   workspace,
+  skillRegistry,
 });
 
 const cliTaskArg = process.argv.slice(2).filter(arg => !arg.startsWith('--')).join(' ').trim();

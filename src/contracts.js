@@ -1,4 +1,4 @@
-/** @typedef {'read' | 'write' | 'execute' | 'network'} Capability */
+/** @typedef {'read' | 'write' | 'execute' | 'network' | 'skill'} Capability */
 
 export const TOOL_CAPABILITIES = Object.freeze({
   repo_list: 'read',
@@ -9,6 +9,12 @@ export const TOOL_CAPABILITIES = Object.freeze({
   project_verify: 'execute',
   shell_exec: 'execute',
   web_fetch: 'network',
+  read_skill: 'skill',
+  find_symbols: 'read',
+  github_read: 'network',
+  github_write: 'network',
+  mail_read: 'network',
+  mail_send: 'network'
 });
 
 export const TOOL_DEFINITIONS = Object.freeze([
@@ -20,6 +26,51 @@ export const TOOL_DEFINITIONS = Object.freeze([
       parameters: {
         type: 'object',
         properties: { path: { type: 'string', description: 'Workspace-relative directory path. Defaults to the root.' } },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_read',
+      description: 'Read GitHub issues, PRs, diffs, or search results using a reference URI (e.g., issue://123, pr://482, pr://482/diff/all).',
+      parameters: {
+        type: 'object',
+        required: ['reference'],
+        properties: {
+          reference: { type: 'string', description: 'The GitHub reference URI (e.g. pr://<number>, issue://<number>).' }
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_symbols',
+      description: 'Search the entire repository for function, class, or type definitions using a regex or partial name. Use this to quickly navigate large codebases.',
+      parameters: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string', description: 'Search term or regex pattern.' }
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_skill',
+      description: 'Fetch the full instructions for an on-demand skill listed in your system prompt.',
+      parameters: {
+        type: 'object',
+        required: ['name'],
+        properties: {
+          name: { type: 'string', description: 'Exact name of the skill to read.' }
+        },
         additionalProperties: false,
       },
     },
@@ -134,6 +185,70 @@ export const TOOL_DEFINITIONS = Object.freeze([
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'github_read',
+      description: 'Read a GitHub PR, issue, or repository using the native GitHub REST API. Requires GITHUB_TOKEN environment variable. E.g., target="repos/owner/repo/issues/123".',
+      parameters: {
+        type: 'object',
+        required: ['target'],
+        properties: {
+          target: { type: 'string', description: 'GitHub API path relative to api.github.com (e.g., "repos/owner/repo/issues/123")' }
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_write',
+      description: 'Create a PR, issue, or comment using the native GitHub REST API. Requires GITHUB_TOKEN. E.g., target="repos/owner/repo/issues/123/comments", method="POST", body={"body":"Looks good!"}.',
+      parameters: {
+        type: 'object',
+        required: ['target', 'method'],
+        properties: {
+          target: { type: 'string', description: 'GitHub API path (e.g. "repos/owner/repo/issues/123/comments")' },
+          method: { type: 'string', description: 'HTTP method (POST, PATCH, PUT)' },
+          body: { type: 'string', description: 'JSON string of the request body' }
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'mail_read',
+      description: 'Read recent emails using the Gmail REST API. Requires GMAIL_TOKEN. Provide a search query (e.g., "is:unread").',
+      parameters: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string', description: 'Gmail search query' }
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'mail_send',
+      description: 'Send an email using the Gmail REST API. Requires GMAIL_TOKEN.',
+      parameters: {
+        type: 'object',
+        required: ['to', 'subject', 'body'],
+        properties: {
+          to: { type: 'string' },
+          subject: { type: 'string' },
+          body: { type: 'string' }
+        },
+        additionalProperties: false,
+      },
+    },
+  }
 ]);
 
 export function toolResultMessage(callId, name, result) {

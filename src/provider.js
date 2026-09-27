@@ -5,9 +5,9 @@ export class OpenAICompatibleProvider {
   #lastResponseModel;
 
   constructor({ baseUrl, apiKey, model } = {}) {
-    this.#apiKey = apiKey ?? process.env.AI_API_KEY ?? 'local-eval-key';
-    this.#model = model ?? process.env.AI_MODEL ?? 'qwen2.5-coder';
-    this.#baseUrl = baseUrl ?? process.env.AI_BASE_URL ?? 'http://127.0.0.1:8000/v1';
+    this.#apiKey = apiKey ?? process.env.AI_API_KEY ?? 'ollama';
+    this.#model = model ?? process.env.AI_MODEL ?? 'qwen3:1.7b';
+    this.#baseUrl = baseUrl ?? process.env.AI_BASE_URL ?? 'http://127.0.0.1:11434/v1';
   }
 
   async next(messages, tools) {
