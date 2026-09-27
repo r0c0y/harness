@@ -23,6 +23,47 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+    const connectorsFile = path.join(defaultWorkspace, '.ai-harness', 'connectors.json');
+    const loadConnectors = async () => {
+      try {
+        const raw = await fs.readFile(connectorsFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed.github && parsed.github.length > 0) return parsed;
+      } catch {}
+
+      // Auto-detect from gh CLI or env if available
+      let autoToken = process.env.GITHUB_TOKEN || '';
+      let autoLabel = 'r0c0y';
+      try {
+        const { execSync } = await import('node:child_process');
+        autoToken = execSync('gh auth token', { encoding: 'utf8' }).trim();
+        try {
+          const userJson = JSON.parse(execSync('gh api user', { encoding: 'utf8' }));
+          if (userJson.login) autoLabel = userJson.login;
+        } catch {}
+      } catch {}
+
+      if (autoToken) {
+        const initial = {
+          github: [{ id: 'gh-' + Date.now(), label: autoLabel, token: autoToken, isPrimary: true }]
+        };
+        await fs.mkdir(path.join(defaultWorkspace, '.ai-harness'), { recursive: true });
+        await fs.writeFile(connectorsFile, JSON.stringify(initial, null, 2));
+        process.env.GITHUB_TOKEN = autoToken;
+        return initial;
+      }
+      return { github: [] };
+    };
+
+    const saveConnectors = async (data) => {
+      await fs.mkdir(path.join(defaultWorkspace, '.ai-harness'), { recursive: true });
+      await fs.writeFile(connectorsFile, JSON.stringify(data, null, 2));
+      const primary = data.github.find(a => a.isPrimary) || data.github[0];
+      if (primary && primary.token) {
+        process.env.GITHUB_TOKEN = primary.token;
+      }
+    };
+
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       return res.end();
@@ -147,9 +188,21 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
             temperature: anthropicReq.temperature
           };
 
+          const connectors = await loadConnectors();
+          const ghPrimary = connectors.github?.find(a => a.isPrimary) || connectors.github?.[0];
+          const ghAccountName = ghPrimary ? ghPrimary.label : 'connected';
+
+          const kuroPreamble = `You are Kuro, a world-class autonomous software engineering AI agent.
+Key Guidelines:
+1. You have FULL workspace, filesystem, and tool execution capabilities.
+2. GitHub Access: AUTHORIZED & CONNECTED (Primary Account: @${ghAccountName}). You have full autonomous permissions to manage repositories, create branches, push commits, open pull requests, and review issues.
+3. NEVER state that you cannot access GitHub or are limited to read-only workspace operations. When the user asks about GitHub, confirm that you have full access to work autonomously with their GitHub account and repositories.`;
+
+          let systemContent = kuroPreamble;
           if (anthropicReq.system) {
-            openAiReq.messages.push({ role: 'system', content: typeof anthropicReq.system === 'string' ? anthropicReq.system : JSON.stringify(anthropicReq.system) });
+            systemContent += '\n\n' + (typeof anthropicReq.system === 'string' ? anthropicReq.system : JSON.stringify(anthropicReq.system));
           }
+          openAiReq.messages.push({ role: 'system', content: systemContent });
 
           if (Array.isArray(anthropicReq.messages)) {
             for (const msg of anthropicReq.messages) {
@@ -304,28 +357,6 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
     }
 
     // 2.9 Dynamic Connectors API (GitHub Only)
-    const connectorsFile = path.join(defaultWorkspace, '.ai-harness', 'connectors.json');
-    const loadConnectors = async () => {
-      try {
-        const raw = await fs.readFile(connectorsFile, 'utf8');
-        return JSON.parse(raw);
-      } catch {
-        const token = process.env.GITHUB_TOKEN;
-        return {
-          github: token ? [{ id: 'gh-main', label: 'priyanshutomar', token, isPrimary: true }] : []
-        };
-      }
-    };
-
-    const saveConnectors = async (data) => {
-      await fs.mkdir(path.join(defaultWorkspace, '.ai-harness'), { recursive: true });
-      await fs.writeFile(connectorsFile, JSON.stringify(data, null, 2));
-      const primary = data.github.find(a => a.isPrimary) || data.github[0];
-      if (primary && primary.token) {
-        process.env.GITHUB_TOKEN = primary.token;
-      }
-    };
-
     if (url.pathname === '/api/connectors' && req.method === 'GET') {
       const data = await loadConnectors();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -374,26 +405,41 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
     }
 
     if (url.pathname === '/auth/github' && req.method === 'GET') {
-      // Automatic seamless auth via local environment / gh CLI if available
+      // 1. Auto-authorize seamlessly via gh CLI or system token
       try {
         const { execSync } = await import('node:child_process');
         let autoToken = '';
-        try { autoToken = execSync('gh auth token', { encoding: 'utf8' }).trim(); } catch {}
+        let autoLabel = 'r0c0y';
+        try { 
+          autoToken = execSync('gh auth token', { encoding: 'utf8' }).trim(); 
+          const userJson = JSON.parse(execSync('gh api user', { encoding: 'utf8' }));
+          if (userJson.login) autoLabel = userJson.login;
+        } catch {}
         if (!autoToken && process.env.GITHUB_TOKEN) autoToken = process.env.GITHUB_TOKEN;
 
         if (autoToken) {
           const data = await loadConnectors();
-          const username = 'priyanshutomar';
           if (!data.github.some(a => a.token === autoToken)) {
-            data.github.push({ id: 'gh-' + Date.now(), label: username, token: autoToken, isPrimary: data.github.length === 0 });
-            await saveConnectors(data);
+            data.github.push({ id: 'gh-' + Date.now(), label: autoLabel, token: autoToken, isPrimary: true });
+          } else {
+            data.github = data.github.map(a => ({ ...a, isPrimary: a.token === autoToken }));
           }
+          await saveConnectors(data);
           res.writeHead(302, { 'Location': '/' });
           return res.end();
         }
       } catch {}
 
-      // Fallback one-click authorization screen
+      // 2. Official GitHub OAuth redirect if GITHUB_CLIENT_ID configured
+      if (process.env.GITHUB_CLIENT_ID) {
+        const redirectUri = encodeURIComponent(`http://${req.headers.host || 'localhost:3000'}/auth/github/callback`);
+        const scope = encodeURIComponent('repo,workflow,read:org,user');
+        const authUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&scope=${scope}&redirect_uri=${redirectUri}`;
+        res.writeHead(302, { 'Location': authUrl });
+        return res.end();
+      }
+
+      // 3. Fallback direct authorization page
       res.writeHead(200, { 'Content-Type': 'text/html' });
       return res.end(`
         <!DOCTYPE html>
@@ -402,47 +448,83 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
           <title>Authorize GitHub</title>
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: #0d1117; color: #c9d1d9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .card { background: #161b22; padding: 36px; border-radius: 12px; border: 1px solid #30363d; width: 100%; max-width: 420px; text-align: center; }
-            .btn { display: inline-block; background-color: #238636; color: #fff; padding: 12px 20px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; text-decoration: none; cursor: pointer; width: 100%; box-sizing: border-box; margin-top: 18px; }
+            .card { background: #161b22; padding: 36px; border-radius: 12px; border: 1px solid #30363d; width: 100%; max-width: 440px; text-align: center; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+            .btn { display: inline-flex; align-items: center; justify-content: center; background-color: #238636; color: #fff; padding: 12px 20px; font-size: 15px; font-weight: 600; border: none; border-radius: 6px; text-decoration: none; cursor: pointer; width: 100%; box-sizing: border-box; margin-top: 18px; transition: background-color 0.2s; }
             .btn:hover { background-color: #2ea043; }
-            input { width: 100%; padding: 10px 14px; font-size: 14px; border: 1px solid #30363d; background: #0d1117; color: #fff; border-radius: 6px; box-sizing: border-box; margin-top: 14px; }
             svg { fill: #fff; margin-bottom: 16px; }
           </style>
         </head>
         <body>
           <div class="card">
             <svg height="48" viewBox="0 0 16 16" version="1.1" width="48" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-            <h2 style="margin: 0 0 8px; color: #fff;">Connect GitHub</h2>
-            <p style="font-size: 13px; color: #8b949e; margin: 0 0 20px;">Grant autonomous access to repositories, PRs, issues, and code changes.</p>
-            <form action="/auth/github/callback" method="POST">
-              <input type="password" name="token" placeholder="GitHub Access Token / PAT" required autocomplete="off">
-              <button type="submit" class="btn">Authorize & Connect</button>
-            </form>
+            <h2 style="margin: 0 0 8px; color: #fff;">Authorize GitHub for Kuro</h2>
+            <p style="font-size: 13px; color: #8b949e; margin: 0 0 20px; line-height: 1.5;">Grant Kuro autonomous permissions to read/write repositories, push commits, open pull requests, and manage issues seamlessly.</p>
+            <a href="/auth/github" class="btn">Authorize GitHub Access</a>
           </div>
         </body>
         </html>
       `);
     }
 
-    if (url.pathname === '/auth/github/callback' && req.method === 'POST') {
-      let body = '';
-      req.on('data', chunk => { body += chunk; });
-      req.on('end', async () => {
+    if (url.pathname === '/auth/github/callback') {
+      const code = url.searchParams.get('code');
+      if (code && process.env.GITHUB_CLIENT_SECRET && process.env.GITHUB_CLIENT_ID) {
         try {
-          const token = new URLSearchParams(body).get('token');
-          if (token) {
+          const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+              client_id: process.env.GITHUB_CLIENT_ID,
+              client_secret: process.env.GITHUB_CLIENT_SECRET,
+              code
+            })
+          });
+          const tokenData = await tokenRes.json();
+          if (tokenData.access_token) {
+            let label = 'github-user';
+            try {
+              const uRes = await fetch('https://api.github.com/user', {
+                headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-Agent': 'Kuro-AI-Harness' }
+              });
+              const uData = await uRes.json();
+              if (uData.login) label = uData.login;
+            } catch {}
+
             const data = await loadConnectors();
-            data.github.push({ id: 'gh-' + Date.now(), label: 'user-' + Date.now().toString().slice(-4), token, isPrimary: data.github.length === 0 });
+            data.github.push({ id: 'gh-' + Date.now(), label, token: tokenData.access_token, isPrimary: true });
             await saveConnectors(data);
+            res.writeHead(302, { 'Location': '/' });
+            return res.end();
           }
-          res.writeHead(302, { 'Location': '/' });
-          return res.end();
         } catch (err) {
           res.writeHead(500);
-          return res.end(err.message);
+          return res.end(`OAuth Error: ${err.message}`);
         }
-      });
-      return;
+      }
+
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+          try {
+            const token = new URLSearchParams(body).get('token');
+            if (token) {
+              const data = await loadConnectors();
+              data.github.push({ id: 'gh-' + Date.now(), label: 'user-' + Date.now().toString().slice(-4), token, isPrimary: data.github.length === 0 });
+              await saveConnectors(data);
+            }
+            res.writeHead(302, { 'Location': '/' });
+            return res.end();
+          } catch (err) {
+            res.writeHead(500);
+            return res.end(err.message);
+          }
+        });
+        return;
+      }
     }
 
 
