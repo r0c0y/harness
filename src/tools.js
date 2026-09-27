@@ -13,11 +13,13 @@ export class WorkspaceTools {
   #workspace;
   #skillRegistry;
   #navigator;
+  #memorySubstrate;
 
-  constructor({ workspace, skillRegistry, navigator }) {
+  constructor({ workspace, skillRegistry, navigator, memorySubstrate }) {
     this.#workspace = path.resolve(workspace);
     this.#skillRegistry = skillRegistry;
     this.#navigator = navigator;
+    this.#memorySubstrate = memorySubstrate;
   }
 
   async execute(name, args) {
@@ -42,6 +44,10 @@ export class WorkspaceTools {
         return this.#readSkill(args);
       case 'find_symbols':
         return this.#findSymbols(args);
+      case 'memory_store':
+        return this.#memoryStore(args);
+      case 'memory_recall':
+        return this.#memoryRecall(args);
       case 'github_read':
         return this.#githubRead(args);
       case 'github_write':
@@ -120,8 +126,14 @@ export class WorkspaceTools {
 
   async #shell({ command, timeout_ms = 30000 }) {
     try {
+      const env = {
+        ...process.env,
+        GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
+        GH_TOKEN: process.env.GITHUB_TOKEN || '',
+      };
       const result = await execFileAsync('/bin/sh', ['-lc', command], {
         cwd: this.#workspace,
+        env,
         timeout: timeout_ms,
         maxBuffer: MAX_COMMAND_CHARS * 3,
       });
@@ -224,15 +236,32 @@ export class WorkspaceTools {
     };
   }
 
-  async #githubRead({ target }) {
-    if (!process.env.GITHUB_TOKEN) {
-      return { ok: false, error: 'GITHUB_TOKEN environment variable is missing. The user must provide it to use GitHub capabilities.' };
+  async #memoryStore(args) {
+    if (!this.#memorySubstrate) return { ok: false, error: 'Memory substrate not configured.' };
+    return this.#memorySubstrate.storeFact(args);
+  }
+
+  async #memoryRecall(args) {
+    if (!this.#memorySubstrate) return { ok: false, error: 'Memory substrate not configured.' };
+    return this.#memorySubstrate.recall(args);
+  }
+
+  async #githubRead({ target, reference }) {
+    const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+    if (!token) {
+      return { ok: false, error: 'GITHUB_TOKEN environment variable is missing. Connect your GitHub account in Settings -> Connectors.' };
     }
     try {
-      const url = `https://api.github.com/${target.replace(/^\/+/, '')}`;
+      let pathTarget = target || reference || '';
+      if (pathTarget.startsWith('pr://')) {
+        pathTarget = `pulls/${pathTarget.replace('pr://', '')}`;
+      } else if (pathTarget.startsWith('issue://')) {
+        pathTarget = `issues/${pathTarget.replace('issue://', '')}`;
+      }
+      const url = pathTarget.startsWith('http') ? pathTarget : `https://api.github.com/${pathTarget.replace(/^\/+/, '')}`;
       const response = await fetch(url, {
         headers: {
-          'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+          'Authorization': `Bearer ${token}`,
           'Accept': 'application/vnd.github.v3+json',
           'User-Agent': 'Kuro-Agent/1.0'
         }
@@ -245,21 +274,22 @@ export class WorkspaceTools {
     }
   }
 
-  async #githubWrite({ target, method, body }) {
-    if (!process.env.GITHUB_TOKEN) {
-      return { ok: false, error: 'GITHUB_TOKEN environment variable is missing. The user must provide it to use GitHub capabilities.' };
+  async #githubWrite({ target, method = 'POST', body }) {
+    const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+    if (!token) {
+      return { ok: false, error: 'GITHUB_TOKEN environment variable is missing. Connect your GitHub account in Settings -> Connectors.' };
     }
     try {
-      const url = `https://api.github.com/${target.replace(/^\/+/, '')}`;
+      const url = target.startsWith('http') ? target : `https://api.github.com/${target.replace(/^\/+/, '')}`;
       const response = await fetch(url, {
         method: method,
         headers: {
-          'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+          'Authorization': `Bearer ${token}`,
           'Accept': 'application/vnd.github.v3+json',
           'Content-Type': 'application/json',
           'User-Agent': 'Kuro-Agent/1.0'
         },
-        body: body
+        body: typeof body === 'string' ? body : JSON.stringify(body || {})
       });
       if (!response.ok) return { ok: false, error: `GitHub API error: ${response.status} ${response.statusText}` };
       const data = await response.json();

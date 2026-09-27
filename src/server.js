@@ -11,11 +11,14 @@ import { OpenAICompatibleProvider } from './provider.js';
 import { WorkspaceTools } from './tools.js';
 import { CodebaseNavigator } from './navigation.js';
 import { SkillRegistry } from './skills.js';
+import { MemorySubstrate } from './memory.js';
 
 const workspace = process.env.HARNESS_WORKSPACE ?? process.cwd();
 const port = parseInt(process.env.PORT || '3000', 10);
 
 export function startServer({ port: serverPort = port, workspace: defaultWorkspace = workspace } = {}) {
+  const memorySubstrate = new MemorySubstrate(defaultWorkspace);
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -31,26 +34,32 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
         if (parsed.github && parsed.github.length > 0) return parsed;
       } catch {}
 
-      // Auto-detect from gh CLI or env if available
+      // Dynamic check from gh CLI or environment token
       let autoToken = process.env.GITHUB_TOKEN || '';
-      let autoLabel = 'r0c0y';
-      try {
-        const { execSync } = await import('node:child_process');
-        autoToken = execSync('gh auth token', { encoding: 'utf8' }).trim();
+      if (!autoToken) {
         try {
-          const userJson = JSON.parse(execSync('gh api user', { encoding: 'utf8' }));
-          if (userJson.login) autoLabel = userJson.login;
+          const { execSync } = await import('node:child_process');
+          autoToken = execSync('gh auth token', { encoding: 'utf8' }).trim();
         } catch {}
-      } catch {}
+      }
 
       if (autoToken) {
-        const initial = {
-          github: [{ id: 'gh-' + Date.now(), label: autoLabel, token: autoToken, isPrimary: true }]
-        };
-        await fs.mkdir(path.join(defaultWorkspace, '.ai-harness'), { recursive: true });
-        await fs.writeFile(connectorsFile, JSON.stringify(initial, null, 2));
-        process.env.GITHUB_TOKEN = autoToken;
-        return initial;
+        try {
+          const userRes = await fetch('https://api.github.com/user', {
+            headers: { 'Authorization': `Bearer ${autoToken}`, 'User-Agent': 'Kuro-Agent/1.0' }
+          });
+          if (userRes.ok) {
+            const userJson = await userRes.json();
+            const label = userJson.login || 'github-user';
+            const initial = {
+              github: [{ id: 'gh-' + Date.now(), label, token: autoToken, isPrimary: true }]
+            };
+            await fs.mkdir(path.join(defaultWorkspace, '.ai-harness'), { recursive: true });
+            await fs.writeFile(connectorsFile, JSON.stringify(initial, null, 2));
+            process.env.GITHUB_TOKEN = autoToken;
+            return initial;
+          }
+        } catch {}
       }
       return { github: [] };
     };
@@ -192,11 +201,18 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
           const ghPrimary = connectors.github?.find(a => a.isPrimary) || connectors.github?.[0];
           const ghAccountName = ghPrimary ? ghPrimary.label : 'connected';
 
+          let memoryProfile = '';
+          try {
+            memoryProfile = await memorySubstrate.getProfile();
+          } catch {}
+
           const kuroPreamble = `You are Kuro, a world-class autonomous software engineering AI agent.
 Key Guidelines:
 1. You have FULL workspace, filesystem, and tool execution capabilities.
-2. GitHub Access: AUTHORIZED & CONNECTED (Primary Account: @${ghAccountName}). You have full autonomous permissions to manage repositories, create branches, push commits, open pull requests, and review issues.
-3. NEVER state that you cannot access GitHub or are limited to read-only workspace operations. When the user asks about GitHub, confirm that you have full access to work autonomously with their GitHub account and repositories.`;
+2. GitHub Access: ${ghPrimary ? `AUTHORIZED & CONNECTED (Primary Account: @${ghAccountName})` : 'Connected via environment tokens'}. You have full autonomous permissions to manage repositories, create branches, push commits, open pull requests, and review issues.
+3. Memory & Context: You maintain a continuous memory substrate across tasks.
+4. NEVER state that you cannot access GitHub or are limited to read-only workspace operations. When the user asks about GitHub, confirm that you have full access to work autonomously with their GitHub account and repositories.
+${memoryProfile ? `\n# Active Memory Profile (Pushed Context)\n${memoryProfile}` : ''}`;
 
           let systemContent = kuroPreamble;
           if (anthropicReq.system) {
@@ -356,6 +372,37 @@ Key Guidelines:
       return;
     }
 
+    // 2.85 Harness Memory Substrate API
+    if (url.pathname === '/api/memory' && req.method === 'GET') {
+      try {
+        const profile = await memorySubstrate.getProfile();
+        const recallAll = await memorySubstrate.recall({ query: '' });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, profile, memories: recallAll.memories }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: err.message }));
+      }
+    }
+
+    if (url.pathname === '/api/memory' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const { topic, fact, category } = JSON.parse(body || '{}');
+          if (!fact) throw new Error('Fact content is required');
+          const result = await memorySubstrate.storeFact({ topic: topic || 'general', fact, category });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify(result));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
     // 2.9 Dynamic Connectors API (GitHub Only)
     if (url.pathname === '/api/connectors' && req.method === 'GET') {
       const data = await loadConnectors();
@@ -440,16 +487,25 @@ Key Guidelines:
       // 1. Auto-authorize seamlessly via gh CLI or system token
       try {
         const { execSync } = await import('node:child_process');
-        let autoToken = '';
-        let autoLabel = 'r0c0y';
-        try { 
-          autoToken = execSync('gh auth token', { encoding: 'utf8' }).trim(); 
-          const userJson = JSON.parse(execSync('gh api user', { encoding: 'utf8' }));
-          if (userJson.login) autoLabel = userJson.login;
-        } catch {}
-        if (!autoToken && process.env.GITHUB_TOKEN) autoToken = process.env.GITHUB_TOKEN;
+        let autoToken = process.env.GITHUB_TOKEN || '';
+        if (!autoToken) {
+          try {
+            autoToken = execSync('gh auth token', { encoding: 'utf8' }).trim();
+          } catch {}
+        }
 
         if (autoToken) {
+          let autoLabel = 'github-user';
+          try {
+            const userRes = await fetch('https://api.github.com/user', {
+              headers: { 'Authorization': `Bearer ${autoToken}`, 'User-Agent': 'Kuro-Agent/1.0' }
+            });
+            if (userRes.ok) {
+              const uData = await userRes.json();
+              if (uData.login) autoLabel = uData.login;
+            }
+          } catch {}
+
           const data = await loadConnectors();
           let account = data.github.find(a => a.token === autoToken);
           if (!account) {
@@ -720,11 +776,12 @@ Key Guidelines:
 
           const controlPlane = new ControlPlane({
             provider,
-            tools: new WorkspaceTools({ workspace: targetWs, navigator, skillRegistry }),
+            tools: new WorkspaceTools({ workspace: targetWs, navigator, skillRegistry, memorySubstrate }),
             policy: new PolicyEngine({ workspace: targetWs, networkEnabled: process.env.HARNESS_ENABLE_NETWORK === '1' }),
             ledger,
             workspace: targetWs,
             skillRegistry,
+            memorySubstrate,
             onEvent: (type, data) => {
               sendSSE('agent_event', { type, data, runId });
             },

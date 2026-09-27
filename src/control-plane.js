@@ -12,14 +12,16 @@ export class ControlPlane {
   #ledger;
   #workspace;
   #onEvent;
+  #memorySubstrate;
 
-  constructor({ provider, tools, policy, ledger, workspace, onEvent }) {
+  constructor({ provider, tools, policy, ledger, workspace, onEvent, memorySubstrate }) {
     this.#provider = provider;
     this.#tools = tools;
     this.#policy = policy;
     this.#ledger = ledger;
     this.#workspace = workspace ?? process.cwd();
     this.#onEvent = onEvent ?? (() => {});
+    this.#memorySubstrate = memorySubstrate;
   }
 
   async #emit(type, payload) {
@@ -40,8 +42,17 @@ export class ControlPlane {
       // Ignore preflight failure, continue with baseline prompt
     }
 
+    let memoryProfile = '';
+    try {
+      if (this.#memorySubstrate) {
+        memoryProfile = await this.#memorySubstrate.getProfile();
+      }
+    } catch {}
+
+    const memorySection = memoryProfile ? `\n\n# Active Memory Profile (Pushed Context)\n${memoryProfile}` : '';
+
     const messages = [
-      { role: 'system', content: systemPrompt() },
+      { role: 'system', content: `${systemPrompt()}${memorySection}` },
       { role: 'user', content: `[TASK]\n${task}${preflightBrief}` },
     ];
 
@@ -64,10 +75,16 @@ export class ControlPlane {
           const warning = 'Stopped without a passing standard verification after the last edit. Do not treat the patch as verified.';
           await this.#emit('task_stopped', { reason: 'unverified_edit', warning });
           await this.#saveSummary(task, warning, 'unverified', turn, toolCalls);
+          if (this.#memorySubstrate) {
+            await this.#memorySubstrate.observeAndConsolidate({ task, answer: warning, verified: false }).catch(() => {});
+          }
           return { answer: warning, turns: turn, toolCalls, verified: false };
         }
         await this.#emit('task_finished', { turn, answer });
         await this.#saveSummary(task, answer, 'finished', turn, toolCalls);
+        if (this.#memorySubstrate) {
+          await this.#memorySubstrate.observeAndConsolidate({ task, answer, verified: true }).catch(() => {});
+        }
         return { answer, turns: turn, toolCalls };
       }
 

@@ -11,6 +11,8 @@ export const TOOL_CAPABILITIES = Object.freeze({
   web_fetch: 'network',
   read_skill: 'skill',
   find_symbols: 'read',
+  memory_store: 'write',
+  memory_recall: 'read',
   github_read: 'network',
   github_write: 'network',
   mail_read: 'network',
@@ -33,13 +35,45 @@ export const TOOL_DEFINITIONS = Object.freeze([
   {
     type: 'function',
     function: {
-      name: 'github_read',
-      description: 'Read GitHub issues, PRs, diffs, or search results using a reference URI (e.g., issue://123, pr://482, pr://482/diff/all).',
+      name: 'memory_store',
+      description: 'Persist a crucial fact, architectural decision, or user preference into harness long-term memory.',
       parameters: {
         type: 'object',
-        required: ['reference'],
+        required: ['topic', 'fact'],
         properties: {
-          reference: { type: 'string', description: 'The GitHub reference URI (e.g. pr://<number>, issue://<number>).' }
+          topic: { type: 'string', description: 'Subject or category name (e.g. tech_stack, conventions, preferences).' },
+          fact: { type: 'string', description: 'The exact knowledge or decision to remember.' },
+          category: { type: 'string', enum: ['static', 'dynamic'], description: 'Static profile (permanent) or dynamic context.' }
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memory_recall',
+      description: 'Retrieve long-term memory, past decisions, or user preferences matching a search query.',
+      parameters: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string', description: 'Keywords or concept to search for in memory.' }
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_read',
+      description: 'Query GitHub API to read issues, PRs, commits, user details, or repositories (e.g. "repos/owner/repo/pulls", "user", "repos/owner/repo/issues").',
+      parameters: {
+        type: 'object',
+        required: ['target'],
+        properties: {
+          target: { type: 'string', description: 'GitHub API path (e.g. "repos/owner/repo/pulls", "user", "issues").' }
         },
         additionalProperties: false,
       },

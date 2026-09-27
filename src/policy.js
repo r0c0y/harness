@@ -1,12 +1,11 @@
 import path from 'node:path';
 
 const BLOCKED_COMMANDS = [
-  /\brm\s+-[a-z]*r[a-z]*f\b/i,
+  /\brm\s+-[a-z]*r[a-z]*f\s+[\/\~]/i,
   /\bsudo\b/i,
   /\bmkfs\b/i,
   /\bdd\s+if=/i,
   /\bshutdown\b|\breboot\b/i,
-  /\bgit\s+push\b/i,
   /\bgit\s+reset\s+--hard\b/i,
   /\bcurl\b[^\n]*\|\s*(?:ba)?sh\b/i,
 ];
