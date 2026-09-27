@@ -1,6 +1,6 @@
 {
-  "name": "DeepSeek Harness",
-  "short_name": "DSH",
+  "name": "Kuro AI Harness",
+  "short_name": "Kuro",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

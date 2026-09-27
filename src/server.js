@@ -446,6 +446,88 @@ export function startServer({ port: serverPort = port, workspace: defaultWorkspa
     }
 
 
+    // 2.95 Binary File Upload API (Supports all formats: images, docs, pdf, zip, xlsx, csv, etc.)
+    if (url.pathname === '/api/session/uploadFileBinary' && req.method === 'POST') {
+      const chunks = [];
+      req.on('data', chunk => chunks.push(chunk));
+      req.on('end', async () => {
+        try {
+          const buffer = Buffer.concat(chunks);
+          const sessionId = url.searchParams.get('sessionId') || 'default-session';
+          const originalName = url.searchParams.get('name') || `upload-${Date.now()}`;
+          const uploadsDir = path.join(defaultWorkspace, '.ai-harness', 'uploads');
+          await fs.mkdir(uploadsDir, { recursive: true });
+          
+          const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const filePath = path.join(uploadsDir, `${Date.now()}-${safeName}`);
+          await fs.writeFile(filePath, buffer);
+
+          const attachmentId = 'att-' + Math.random().toString(36).slice(2, 10);
+          const receiptId = 'rcpt-' + Math.random().toString(36).slice(2, 10);
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            ok: true,
+            value: {
+              receiptId,
+              file: {
+                attachmentId,
+                name: originalName,
+                bytes: buffer.length
+              }
+            }
+          }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            ok: false,
+            error: {
+              code: 'UPLOAD_FAILED',
+              message: err.message,
+              details: {}
+            }
+          }));
+        }
+      });
+      return;
+    }
+
+    // 2.96 Session Export API (Supports HEAD check and GET ZIP/Log download)
+    if (url.pathname === '/api/session.export') {
+      const sessionId = url.searchParams.get('sessionId') || 'current';
+      if (req.method === 'HEAD') {
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="dsh-session-${sessionId}.zip"`
+        });
+        return res.end();
+      }
+      if (req.method === 'GET') {
+        try {
+          const runsDir = path.join(defaultWorkspace, '.ai-harness', 'runs');
+          let exportContent = `# Session Export: ${sessionId}\n\nExported at: ${new Date().toISOString()}\n\n`;
+          try {
+            const entries = await fs.readdir(runsDir);
+            for (const entry of entries) {
+              if (entry.endsWith('.jsonl') || entry.endsWith('.md')) {
+                const c = await fs.readFile(path.join(runsDir, entry), 'utf8');
+                exportContent += `\n--- File: ${entry} ---\n` + c;
+              }
+            }
+          } catch {}
+
+          res.writeHead(200, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="dsh-session-${sessionId}.txt"`
+          });
+          return res.end(Buffer.from(exportContent, 'utf8'));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: err.message }));
+        }
+      }
+    }
+
     // 3. List Sessions / Evidence Ledger Runs
     if (url.pathname === '/api/sessions' && req.method === 'GET') {
       try {
