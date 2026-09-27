@@ -404,7 +404,39 @@ Key Guidelines:
       return;
     }
 
+    if (url.pathname === '/api/connectors/add' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const { token, label } = JSON.parse(body || '{}');
+          if (!token) throw new Error('Token is required');
+          
+          let accountLabel = label || 'github-user';
+          try {
+            const uRes = await fetch('https://api.github.com/user', {
+              headers: { 'Authorization': `Bearer ${token}`, 'User-Agent': 'Kuro-AI-Harness' }
+            });
+            const uData = await uRes.json();
+            if (uData.login) accountLabel = uData.login;
+          } catch {}
+
+          const data = await loadConnectors();
+          const newAccount = { id: 'gh-' + Date.now(), label: accountLabel, token, isPrimary: data.github.length === 0 };
+          data.github.push(newAccount);
+          await saveConnectors(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true, account: newAccount }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
     if (url.pathname === '/auth/github' && req.method === 'GET') {
+      const isJson = url.searchParams.get('json') === 'true';
       // 1. Auto-authorize seamlessly via gh CLI or system token
       try {
         const { execSync } = await import('node:child_process');
@@ -419,16 +451,27 @@ Key Guidelines:
 
         if (autoToken) {
           const data = await loadConnectors();
-          if (!data.github.some(a => a.token === autoToken)) {
-            data.github.push({ id: 'gh-' + Date.now(), label: autoLabel, token: autoToken, isPrimary: true });
+          let account = data.github.find(a => a.token === autoToken);
+          if (!account) {
+            account = { id: 'gh-' + Date.now(), label: autoLabel, token: autoToken, isPrimary: true };
+            data.github.push(account);
           } else {
             data.github = data.github.map(a => ({ ...a, isPrimary: a.token === autoToken }));
           }
           await saveConnectors(data);
+          if (isJson) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ ok: true, account }));
+          }
           res.writeHead(302, { 'Location': '/' });
           return res.end();
         }
       } catch {}
+
+      if (isJson) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'No active local GitHub CLI session detected' }));
+      }
 
       // 2. Official GitHub OAuth redirect if GITHUB_CLIENT_ID configured
       if (process.env.GITHUB_CLIENT_ID) {
